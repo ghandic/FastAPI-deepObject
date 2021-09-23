@@ -1,8 +1,9 @@
 from typing import Any, Callable, Dict, List, Optional, _GenericAlias, Union
 from inspect import signature, Signature, Parameter
+from collections import Counter
 
-from pydantic import BaseModel
-from fastapi import Query, Depends
+from pydantic import BaseModel, ValidationError
+from fastapi import Query, Depends, HTTPException
 
 
 def flatten_dict(data: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
@@ -24,7 +25,7 @@ def get_settings(model: BaseModel, name: str) -> Dict[str, Any]:
     return {}
 
 
-def deep_query(model: Union[_GenericAlias, BaseModel], name: str = "") -> Callable:
+def DeepQuery(model: Union[_GenericAlias, BaseModel], name: str = "", unique_on: List[str] = []) -> Depends:
     # Handing typing.List
     is_list = False
     is_optional = False
@@ -53,15 +54,34 @@ def deep_query(model: Union[_GenericAlias, BaseModel], name: str = "") -> Callab
     if is_list:
 
         async def parse(**kwargs) -> List[model]:
-            return [model(**kwarg) for kwarg in flatten_dict(kwargs)]
+            flat_kwargs = flatten_dict(kwargs)
+            if unique_on:
+                for unique_key in unique_on:
+                    vals = list(map(lambda kwargs: kwargs.get(unique_key), flat_kwargs))
+                    if len(set(vals)) != len(vals):
+                        raise HTTPException(
+                            status_code=400, detail=f"Duplicate query parameters supplied for {unique_key}"
+                        )
+            try:
+                return [model(**kwarg) for kwarg in flat_kwargs]
+            except ValidationError as e:
+                raise HTTPException(status_code=400, detail=f"{e}")
 
     else:
 
         async def parse(**kwargs) -> model:
-            return model(**kwargs)
+            try:
+                if is_optional:
+                    if any(v is not None for v in kwargs.values()):
+                        return model(**kwargs)
+                    return None
+
+                return model(**kwargs)
+            except ValidationError as e:
+                raise HTTPException(status_code=400, detail=f"{e}")
 
     def get_default(param: Parameter):
-        if is_optional:
+        if is_optional or is_list:
             return None
         return ... if (param.default is Parameter.empty) else param.default
 
@@ -82,8 +102,5 @@ def deep_query(model: Union[_GenericAlias, BaseModel], name: str = "") -> Callab
     )
     parse.__signature__ = newsig
 
-    return parse
+    return Depends(parse)
 
-
-def DeepQuery(model: BaseModel, name: str = "") -> Depends:
-    return Depends(deep_query(model, name))

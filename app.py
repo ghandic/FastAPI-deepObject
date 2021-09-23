@@ -30,5 +30,10 @@ async def searchs(users: List[User] = DeepQuery(List[User])):
     print(users)
 
 
+@app.get("/unique-searchs")
+async def searchs(users: List[User] = DeepQuery(List[User], unique_on=["role"])):
+    print(users)
+
+
 if __name__ == "__main__":
     uvicorn.run("app:app", port=5555, host="0.0.0.0", reload=True, log_config=None)
